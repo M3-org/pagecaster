@@ -1,0 +1,15 @@
+services:
+  pagecaster:
+    build: .
+    shm_size: 256m
+    # Use host network to access localhost:8000 (Linux approach)
+    network_mode: host
+    environment:
+      - WEB_URL=http://localhost:8000
+      - AUDIO_SOURCE=browser
+      - RTMP_URL=${RTMP_URL}/${STREAM_KEY}
+      - SCREEN_WIDTH=1280
+      - SCREEN_HEIGHT=720
+      - FRAMERATE=30
+      - FFMPEG_PRESET=veryfast
+    restart: unless-stopped
