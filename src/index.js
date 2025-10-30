@@ -17,7 +17,10 @@ class PageCaster {
     this.screenHeight = parseInt(process.env.SCREEN_HEIGHT) || 480;
     this.ffmpegPreset = process.env.FFMPEG_PRESET || 'veryfast';
     this.framerate = parseInt(process.env.FRAMERATE) || 30;
-    
+    // Hardware encoding: 'vaapi', 'nvenc', or 'software' (default)
+    this.videoEncoder = process.env.VIDEO_ENCODER || 'software';
+    this.vaapiDevice = process.env.VAAPI_DEVICE || '/dev/dri/renderD128';
+
     this.browser = null;
     this.page = null;
     this.ffmpegProcess = null;
@@ -34,32 +37,95 @@ class PageCaster {
     }
   }
 
+
   async setupBrowser() {
     console.log('Starting Puppeteer browser...');
     
     try {
       this.browser = await puppeteer.launch({
-        headless: false,  // Use non-headless for X11 display
+        headless: false,  // We want a real window in Xvfb
         ignoreDefaultArgs: ['--enable-automation'],
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
         args: [
+          '--remote-debugging-port=9222',
           '--no-sandbox',
+//          '--debug-print',
+          '--disable-logging',
+          '--disable-domain-reliability',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
+          '--disable-model-download-verification',
+          '--disable-notifications',
+//          '--disable-software-rasterizer',
+//          '--gpu-startup-dialog',
+//          '--disable-low-end-device-mode',
+//          '--disable-dev-shm-usage',
+
+          // Try to keep rendering unthrottled
+          '--autoplay-policy=no-user-gesture-required',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+
+          '--enable-features=AcceleratedVideoDecodeLinuxZeroCopyGL,AcceleratedVideoDecodeLinuxGL,VaapiOnNvidiaGPUs',
+
+          // GPU / compositor hints
+          '--video-capture-use-gpu-memory-buffer',
+          '--ignore-gpu-blocklist',
+          '--force-webgpu-compat',
+          '--force-video-overlays',
+          '--enable-webgl',
+          '--enable-webgl2',
+          '--enable-gpu',
+          '--enable-gpu-rasterization',
+          '--enable-gpu-memory-buffer-compositor-resources',
+          '--enable-hardware-overlays',
+          '--enable-accelerated-2d-canvas',
+          '--enable-native-gpu-memory-buffers',
+          '--enable-accelerated-video',
+          '--enable-accelerated-video-decode',
+          '--enable-zero-copy',
+          '--enable-features=Vulkan',
+          '--disable-vulkan-surface',
+          '--enable-unsafe-webgpu',
+//          '--use-vulkan',
+          '--use-gl=desktop', // simpler than --use-gl=angle/--use-angle=gl-egl on Linux GPU
+          '--use-angle=vulkan',
+          '--disable-frame-rate-limit',
+//          '--frame-rate 30',
+          '--force-device-scale-factor=1',
           '--no-first-run',
+          '--kiosk',
+          '--disable-gpu-vsync',
+          '--double-buffer-compositing',
+
           `--window-size=${this.screenWidth},${this.screenHeight}`,
           '--window-position=0,0',
-          '--autoplay-policy=no-user-gesture-required',
+
+          // media / security loosening for local content
           '--allow-running-insecure-content',
           '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--enable-features=PulseAudio',
-          '--kiosk'
-        ],
-        defaultViewport: null
-      });
-      console.log('Browser launched successfully');
+          '--enable-usermedia-screen-capturing',
+          '--allow-http-screen-capture',
+//          '--use-fake-device-for-media-stream',
+//          '--use-fake-ui-for-media-stream',
 
+          // pulseaudio hint (not strictly required but fine)
+          '--enable-features=PulseAudio',
+
+          // Capture WebGL Audio
+          '--auto-select-desktop-capture-source=WebGLStreamTab'
+
+        ],
+        defaultViewport: null,
+        env: {
+          ...process.env,
+          DISPLAY: process.env.DISPLAY || ':99',
+          PULSE_SERVER: process.env.PULSE_SERVER || 'unix:/tmp/pulse-socket'
+        }
+      });
+  
+      console.log('Browser launched successfully');
+  
       this.page = await this.browser.newPage();
       console.log('New page created');
       
@@ -68,14 +134,15 @@ class PageCaster {
         height: this.screenHeight
       });
       console.log('Viewport set');
-
+  
       console.log(`Navigating to: ${this.webUrl}`);
       await this.page.goto(this.webUrl, { 
         waitUntil: 'domcontentloaded',
         timeout: 60000 
       });
       console.log('Page loaded successfully');
-
+  
+      // give video/audio elements a moment to settle
       await new Promise(resolve => setTimeout(resolve, 2000));
       console.log('Browser setup complete');
     } catch (error) {
@@ -86,7 +153,7 @@ class PageCaster {
 
   async setupAudioCapture() {
     console.log(`Setting up audio capture (source: ${this.audioSource})`);
-    
+
     switch (this.audioSource.toLowerCase()) {
       case 'browser':
         return await this.setupWebpageAudio();
@@ -217,45 +284,76 @@ class PageCaster {
   }
 
   buildFFmpegArgs(audioConfig) {
-    // Use X11 capture for better performance
-    const baseArgs = [
-      '-y',
+    const baseArgs = ['-y'];
+
+    // X11 capture with thread queue for smoother capture
+    baseArgs.push(
+      '-thread_queue_size', '16',
       '-f', 'x11grab',
-      '-r', this.framerate.toString(),  // Input framerate
+      '-r', this.framerate.toString(),
       '-s', `${this.screenWidth}x${this.screenHeight}`,
       '-draw_mouse', '0',
       '-i', ':99.0'
-    ];
+    );
 
+    // Audio input with thread queue
     const audioArgs = [];
     switch (audioConfig.type) {
       case 'url':
-        audioArgs.push('-i', audioConfig.source);
+        audioArgs.push('-thread_queue_size', '16', '-i', audioConfig.source);
         break;
       case 'stream':
-        // Use PulseAudio to capture from our virtual audio device
-        audioArgs.push('-f', 'pulse', '-i', 'virtual-audio.monitor');
+        // Use ALSA instead of pulse (jrottenberg ffmpeg doesn't have pulse support)
+        audioArgs.push('-thread_queue_size', '16', '-f', 'alsa', '-i', 'default');
         break;
       case 'silent':
         audioArgs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
         break;
     }
 
-    const outputArgs = [
-      '-c:v', 'libx264',
-      '-preset', this.ffmpegPreset,
-      '-tune', 'zerolatency',
+    // Video encoding based on encoder type
+    const outputArgs = [];
+
+    if (this.videoEncoder === 'vaapi') {
+      outputArgs.push(
+        '-vf', 'format=nv12|vaapi,hwupload',
+        '-c:v', 'h264_vaapi',
+        '-qp', '20',  // Quality parameter for VAAPI (lower = better quality)
+        '-bf', '0'    // B-frames
+      );
+    } else if (this.videoEncoder === 'nvenc') {
+      outputArgs.push(
+        '-c:v', 'h264_nvenc',
+        '-preset', 'p1',  // NVENC preset p1 (fastest encoding)
+        '-tune', 'ull',   // Ultra-low latency
+        '-rc', 'cbr',     // Constant bitrate
+        '-b:v', '3000k',
+        '-g', '60',       // GOP size (2 seconds at 30fps)
+        '-zerolatency', '1',  // Enable zero latency mode
+        '-delay', '0'     // No delay
+      );
+    } else {
+      // Software encoding (libx264)
+      outputArgs.push(
+        '-c:v', 'libx264',
+        '-preset', this.ffmpegPreset,
+        '-tune', 'zerolatency'
+      );
+    }
+
+    // Common output parameters
+    outputArgs.push(
       '-maxrate', '3000k',
       '-bufsize', '6000k',
       '-pix_fmt', 'yuv420p',
-      '-r', this.framerate.toString(),  // Output framerate
-      '-vsync', 'cfr',  // Constant frame rate
+      '-r', this.framerate.toString(),
+      '-vsync', 'cfr',  // Constant frame rate (older FFmpeg compatibility)
       '-c:a', 'aac',
       '-b:a', '128k',
       '-ac', '2',
       '-f', 'flv',
       this.rtmpUrl
-    ];
+    );
 
     return [...baseArgs, ...audioArgs, ...outputArgs];
   }
@@ -284,11 +382,12 @@ class PageCaster {
     try {
       console.log('Starting PageCaster...');
       console.log(`Audio source: ${this.audioSource}`);
+      console.log(`Video encoder: ${this.videoEncoder}`);
       console.log(`Web URL: ${this.webUrl}`);
       console.log(`RTMP URL: ${this.rtmpUrl}`);
       console.log(`Screen size: ${this.screenWidth}x${this.screenHeight}`);
       console.log(`Framerate: ${this.framerate}fps`);
-      
+
       await this.setupBrowser();
       await this.startScreencast();
       
