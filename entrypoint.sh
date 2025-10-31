@@ -18,9 +18,15 @@ echo "Audio source: $AUDIO_SOURCE"
 echo "Screen size: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
 echo "Web URL: $WEB_URL"
 
+# Clean up old X11 lock files
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 # Configure display system for X11 capture
 Xvfb :99 -screen 0 "${SCREEN_WIDTH}"x"${SCREEN_HEIGHT}"x24 &
 export DISPLAY=:99
+
+# Wait for X server to be ready
+sleep 2
 
 # Configure audio system - run in user mode, not system mode
 rm -rf /var/run/pulse /var/lib/pulse /root/.config/pulse
@@ -44,5 +50,7 @@ echo "Checking audio devices:"
 pulseaudio --check || echo "PulseAudio not running"
 pactl info || echo "pactl failed"
 
+sleep 10
+
 # Start the Node.js Puppeteer application
-exec node src/index.js
+exec node src/index.firefox.js

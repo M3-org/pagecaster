@@ -1,5 +1,5 @@
 const puppeteer = require('puppeteer');
-const { getStream } = require('puppeteer-stream');
+const { launch, getStream } = require('puppeteer-stream');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -47,6 +47,7 @@ class PageCaster {
         ignoreDefaultArgs: ['--enable-automation'],
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
         args: [
+//          '--show-fps',
           '--remote-debugging-port=9222',
           '--no-sandbox',
 //          '--debug-print',
@@ -95,8 +96,8 @@ class PageCaster {
           '--force-device-scale-factor=1',
           '--no-first-run',
           '--kiosk',
-          '--disable-gpu-vsync',
-          '--double-buffer-compositing',
+//          '--disable-gpu-vsync',
+//          '--double-buffer-compositing',
 
           `--window-size=${this.screenWidth},${this.screenHeight}`,
           '--window-position=0,0',

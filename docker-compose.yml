@@ -1,15 +1,44 @@
 services:
+  static-server:
+    image: nginx:alpine-slim
+    volumes:
+      - ./src:/usr/share/nginx/html:ro
   pagecaster:
-    build: .
-    shm_size: 256m
+    build:
+      context: .
+      dockerfile: Dockerfile.ubuntu
+    shm_size: 4g
+    depends_on:
+      - static-server
+    ports:
+      - "127.0.0.1:9222:9222"
     # Use host network to access localhost:8000 (Linux approach)
-    network_mode: host
+    #network_mode: host
     environment:
-      - WEB_URL=http://localhost:8000
+      - WEB_URL=http://static-server
       - AUDIO_SOURCE=browser
       - RTMP_URL=${RTMP_URL}/${STREAM_KEY}
       - SCREEN_WIDTH=1280
       - SCREEN_HEIGHT=720
       - FRAMERATE=30
-      - FFMPEG_PRESET=veryfast
+      - FFMPEG_PRESET=ultrafast # This is where you would set the nvidia
+      # Hardware encoding: 'vaapi' (Intel/AMD), 'nvenc' (NVIDIA), or 'software'
+      - VIDEO_ENCODER=nvenc
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # VAAPI_DEVICE=/dev/dri/renderD128 # Removed for NVIDIA setup
+      # NVIDIA_VISIBLE_DEVICES and NVIDIA_DRIVER_CAPABILITIES are handled by 'gpus: all'
+    # Expose GPU devices for hardware acceleration
+    # Removed /dev/dri mapping for NVIDIA setup
+    #gpus: all
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 16G
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['all']
+              capabilities: [gpu, video, compute, utility]
+
     restart: unless-stopped
