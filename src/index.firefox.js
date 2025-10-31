@@ -48,13 +48,11 @@ class PageCaster {
 //        ignoreDefaultArgs: ['--enable-automation'],
 //        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
         args: [
-          `-width ${this.screenWidth}`,
-          `-height ${this.screenHeight}`,
+          '--width=1920', '--height=1080',
           '--display=:99',
           '--kiosk',
           '--remote-debugging-port',
-          '--remote-allow-system-access',
-          ''
+          '--remote-allow-system-access'
         ],
         defaultViewport: null,
         env: {
