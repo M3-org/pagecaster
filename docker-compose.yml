@@ -2,7 +2,7 @@ services:
   static-server:
     image: nginx:alpine-slim
     volumes:
-      - ./src:/usr/share/nginx/html:ro
+      - ./app:/usr/share/nginx/html:ro
   pagecaster:
     build:
       context: .
